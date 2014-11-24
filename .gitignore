@@ -1,0 +1,6 @@
+cabal.sandbox.config
+.cabal-sandbox/
+dist/
+st
+libqtbits*.so*
+

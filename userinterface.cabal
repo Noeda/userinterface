@@ -1,0 +1,46 @@
+name:                userinterface
+synopsis:            User interface based on Qt 5.
+description:
+    This is a graphical user interface library that uses Qt as a backend. These
+    are not 1:1 bindings to Qt, this library attempts to be simple but
+    powerful. Qt is merely used to provide a backend.
+version:             0.1.0.0
+license:             MIT
+license-file:        LICENSE
+author:              Mikko Juola
+maintainer:          mikjuo@gmail.com
+category:            Graphics
+build-type:          Custom
+cabal-version:       >=1.10
+
+library
+  exposed-modules:     Graphics.UI
+                       Graphics.UI.Internal
+                       Graphics.UI.Internal.Touchable
+                       Graphics.UI.Internal.QObject
+                       Graphics.UI.Internal.QTypes
+                       Graphics.UI.Internal.QString
+                       Graphics.UI.MainWindow
+                       Graphics.UI.MenuBar
+                       Graphics.UI.Timer
+  build-depends:       base >=4.7 && <5.0
+                      ,bytestring >=0.10.4 && <1.0
+                      ,containers >=0.5.5 && <1.0
+                      ,exceptions >=0.6.1 && <1.0
+                      ,lens >=4.6 && <5.0
+                      ,text >=1.2 && <2.0
+                      ,transformers >=0.4 && <1.0
+  hs-source-dirs:      src
+  ghc-options:         -Wall
+  default-language:    Haskell2010
+
+executable smoke-test
+  main-is:             Main.hs
+  build-depends:       base >=4.7 && <5.0
+                      ,userinterface
+                      ,text >=1.2 && <2.0
+                      ,transformers >=0.4 && <1.0
+  hs-source-dirs:      smoke-test
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
