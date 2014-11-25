@@ -1,4 +1,4 @@
-#include "menubar.h"
+#include "haskell_action.h"
 #include <QMainWindow>
 #include <QMenuBar>
 #include <cassert>
@@ -52,6 +52,11 @@ HaskellAction::~HaskellAction()
 }
 
 void HaskellAction::trigger()
+{
+    haskellTrigger();
+}
+
+void HaskellAction::trigger_qobject( QObject* )
 {
     haskellTrigger();
 }

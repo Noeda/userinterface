@@ -1,5 +1,5 @@
-#ifndef qtbits_menubar_h
-#define qtbits_menubar_h
+#ifndef qtbits_haskell_action_h
+#define qtbits_haskell_action_h
 
 #include <QObject>
 #include <cstdio>
@@ -17,6 +17,7 @@ public:
 
 public slots:
     void trigger();
+    void trigger_qobject( QObject* );
 };
 
 #endif

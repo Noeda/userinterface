@@ -10,6 +10,6 @@ class Touchable a where
     touch :: a -> IO ()
 
 instance Touchable (IORef a) where
-    touch !ref = return ()
+    touch !_ = return ()
     {-# NOINLINE touch #-}
 

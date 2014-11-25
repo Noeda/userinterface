@@ -1,4 +1,4 @@
-#include "menubar.h"
+#include "haskell_action.h"
 #include <QTimer>
 
 extern "C" {

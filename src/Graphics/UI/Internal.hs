@@ -5,29 +5,52 @@
 module Graphics.UI.Internal where
 
 import Control.Applicative
+import Control.Exception ( allowInterrupt )
 import Control.Monad.Catch
 import Control.Monad.Fix
 import Control.Monad.IO.Class
 import Data.IORef
-import qualified Data.Set as S
 import Data.Typeable
-import Graphics.UI.Internal.QTypes
-import Foreign.ForeignPtr
 import Foreign.Ptr
-import System.Exit
-import System.IO
 import System.IO.Unsafe
 
-insulateExceptions :: IO a -> IO a
+foreign import ccall "wrapper" wrapIO :: IO () -> IO (FunPtr (IO ()))
+foreign export ccall freeHaskellFunPtr :: FunPtr a -> IO ()
+foreign import ccall application_quit :: IO ()
+
+wrapAndInsulateIO :: IO () -> IO (FunPtr (IO ()))
+wrapAndInsulateIO action = wrapIO $ insulateExceptions action
+
+-- holds an uncaught exception thrown inside `insulateExceptions`
+pendingException :: IORef (Maybe SomeException)
+pendingException = unsafePerformIO $ newIORef Nothing
+{-# NOINLINE pendingException #-}
+
+-- this should restore the masked exception state before `runUI` was called.
+restoreFunction :: IORef (IO a -> IO a)
+restoreFunction = unsafePerformIO $ newIORef id
+{-# NOINLINE restoreFunction #-}
+
+-- wrap an IO action to handle exceptions correctly through Qt (we can't throw
+-- an exception with C code between so we have to employ trickery).
+insulateExceptions :: IO () -> IO ()
 insulateExceptions action = mask $ \restore -> do
-    result <- try $ restore action
+    restore2 <- readIORef restoreFunction
+    result <- try $ restore (restore2 $ allowInterrupt >> action >> allowInterrupt)
     case result of
-        Left err -> do
-            hPutStrLn stderr $ "insulateExceptions: Uncaught exception in a Qt callback. We cannot continue. " ++ show (err :: SomeException)
-            exitFailure
+        Left err -> writeIORef pendingException (Just err) >>
+                    application_quit
         Right ok -> return ok
 
-class UIElement a where
+-- | Elements that can be deleted. Use `Graphics.UI.deleteUIElement` to delete
+-- elements.
+--
+-- Once deleted, trying to use the element will result in a user error. In
+-- addition, deleting elements that have children also deletes the children.
+--
+-- Deleting already deleted elements is safe and does not do anything.
+class UIElement a s | a -> s where
+    -- | Deletes an element. Don't use this, use `Graphics.UI.deleteUIElement`.
     delete :: a -> IO ()
 
 eventHandler :: Event -> IO ()
@@ -41,16 +64,18 @@ activeCallback :: IORef (Maybe (Event -> IO ()))
 activeCallback = unsafePerformIO $ newIORef Nothing
 {-# NOINLINE activeCallback #-}
 
-topReferences :: IORef (S.Set (ForeignPtr ()))
-topReferences = unsafePerformIO $ newIORef S.empty
-{-# NOINLINE topReferences #-}
-
-addTopForeignPtr :: ForeignPtr a -> IO ()
-addTopForeignPtr fptr = atomicModifyIORef' topReferences $ \old ->
-    ( S.insert (castForeignPtr fptr) old, () )
-
+-- | All user interface functions need to be run inside this monad.
+--
+-- This monad enforces:
+--
+--     * All UI functions are run in the same thread.
+--     * UI resources cannot be transferred to another UI instance.
+--
 newtype UIAction s a = UIAction { unsafeUnwrapUIAction :: IO a }
                        deriving ( Monad
+                                , MonadThrow
+                                , MonadCatch
+                                , MonadMask
                                 , Functor
                                 , MonadFix
                                 , Typeable
@@ -59,7 +84,10 @@ newtype UIAction s a = UIAction { unsafeUnwrapUIAction :: IO a }
 instance MonadIO (UIAction s) where
     liftIO = UIAction
 
-data Event = Ready
-           | AboutToQuit
+-- | Global events.
+data Event = Ready         -- ^ UI is initialized.
+           | AboutToQuit   -- ^ UI is about to close.
+                           --   On some platforms, `runUI` may not return so
+                           --   you get this event instead.
              deriving ( Eq, Ord, Enum, Read, Show, Typeable )
 

@@ -1,8 +1,13 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE AutoDeriveTypeable #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE GADTs #-}
+
+-- | Menu bar and menus.
+--
 
 module Graphics.UI.MenuBar
     ( createMenuBar
@@ -13,18 +18,8 @@ module Graphics.UI.MenuBar
     , MenuParent() )
     where
 
-import Control.Monad.Catch
-import Control.Monad.IO.Class
-import Data.Dynamic
 import qualified Data.Text as T
-import Data.Typeable
-import Foreign.ForeignPtr
-import Foreign.Ptr
-import Graphics.UI.Internal
-import Graphics.UI.Internal.QObject
-import Graphics.UI.Internal.QString
-import Graphics.UI.Internal.QTypes
-import Graphics.UI.Internal.Touchable
+import Graphics.UI.Internal.Common
 import Graphics.UI.MainWindow
 
 foreign import ccall create_menubar :: IO (Ptr QMenuBar)
@@ -33,38 +28,36 @@ foreign import ccall add_menubar_menu :: Ptr QMenuBar -> Ptr QMenu -> IO ()
 foreign import ccall set_menubar :: Ptr QMainWindow -> Ptr QMenuBar -> IO ()
 foreign import ccall add_menu_action ::
     Ptr QMenu -> Ptr QString -> FunPtr (IO ()) -> IO ()
-foreign export ccall freeHaskellFunPtr :: FunPtr a -> IO ()
-foreign import ccall "wrapper" wrapIO :: IO () -> IO (FunPtr (IO ()))
 
-data MenuBar s = MenuBar { menuBarPtr :: CommonQObject QMenuBar
+data MenuBar s = MenuBar { menuBarPtr :: CommonQObject s QMenuBar
                          , mainWindow :: MainWindow s }
                  deriving ( Eq, Typeable )
 
-instance HasCommonQObject (MenuBar s) QMenuBar where
+instance HasCommonQObject (MenuBar s) s QMenuBar where
     getCommonQObject = menuBarPtr
 
-instance UIElement (MenuBar s) where
+instance UIElement (MenuBar s) s where
     delete = deleteCommonQObject . getCommonQObject
 
-instance UIElement (Menu s) where
+instance UIElement (Menu s) s where
     delete = deleteCommonQObject . getCommonQObject
 
 data Menu s where
-    Menu :: MenuParent a => CommonQObject QMenu -> a -> Menu s
+    Menu :: MenuParent a s => CommonQObject s QMenu -> a -> Menu s
 
-instance HasCommonQObject (Menu s) QMenu where
+instance HasCommonQObject (Menu s) s QMenu where
     getCommonQObject (Menu coq _) = coq
 
 instance Eq (Menu s) where
     (Menu ptr1 _) == (Menu ptr2 _) = ptr1 == ptr2
 
-class MenuParent a where
-    toQObject :: a -> CommonQObject QObject
+class MenuParent a s where
+    toQObject :: a -> CommonQObject s QObject
 
-instance MenuParent (Menu s) where
+instance MenuParent (Menu s) s where
     toQObject (Menu ptr _) = castCommonQObject ptr
 
-instance MenuParent (MenuBar s) where
+instance MenuParent (MenuBar s) s where
     toQObject (MenuBar{..}) = castCommonQObject menuBarPtr
 
 instance Touchable (Menu s) where
@@ -73,27 +66,33 @@ instance Touchable (Menu s) where
 instance Touchable (MenuBar s) where
     touch (MenuBar cqo _) = touch cqo
 
+-- | Creates a menu bar.
 createMenuBar :: MainWindow s -> UIAction s (MenuBar s)
 createMenuBar mainwindow = liftIO $ mask_ $
     withCommonQObject mainwindow $ \window_ptr -> do
         mbar <- create_menubar
         set_menubar window_ptr mbar
-        cobject <- addCommonQObject mbar Nothing
-        addChild window_ptr mbar (touch cobject)
+        cobject <- addCommonQObject mbar Nothing "QMenuBar"
+        addChild window_ptr mbar (parentKeepsAlive cobject)
         return $ MenuBar { menuBarPtr = cobject
                          , mainWindow = mainwindow }
 
+-- | Creates a menu and puts it in a menu bar.
 createMenu :: T.Text -> MenuBar s -> UIAction s (Menu s)
 createMenu title mb = liftIO $ do
     asQString title $ \qstring -> withCommonQObject mb $ \parent -> do
         menu <- create_menu qstring
         add_menubar_menu parent menu
-        cobject <- addCommonQObject menu Nothing
-        addChild parent menu (touch cobject)
+        cobject <- addCommonQObject menu Nothing "QMenu"
+        addChild parent menu (parentKeepsAlive cobject)
         return $ Menu cobject mb
 
-addMenuAction :: T.Text -> Menu s -> UIAction s () -> UIAction s ()
-addMenuAction title (Menu cobject mb) (UIAction (insulateExceptions -> action)) = liftIO $ mask_ $
+-- | Adds an action to a menu.
+addMenuAction :: T.Text           -- ^ The text on the action.
+              -> Menu s           -- ^ Where to add the action.
+              -> UIAction s ()    -- ^ Called when the action is selected.
+              -> UIAction s ()
+addMenuAction title (Menu cobject _) (UIAction (insulateExceptions -> action)) = liftIO $ mask_ $
     asQString title $ \qstring -> do
         withCommonQObject cobject $ \ptr -> do
             wrapped <- wrapIO action  -- cleaned up by Qt

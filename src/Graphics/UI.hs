@@ -2,11 +2,20 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 
+-- | This module can initialize UI system and start the event loop.
+--
+
 module Graphics.UI
-    ( runUI
-    , deleteUIElement
+    (
+    -- * Running a user interface
+      runUI
+    , stopUI
+    , UIAction()
+    -- * Global events
     , Event(..)
-    , UIAction() )
+    -- * Deleting elements
+    , deleteUIElement
+    , UIElement() )
     where
 
 import Control.Concurrent
@@ -14,18 +23,14 @@ import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
 import Data.IORef
-import qualified Data.Set as S
 import Foreign.C.String
 import Foreign.C.Types
 import Foreign.Marshal.Array
 import Foreign.Ptr
-import GHC.IO ( unsafeUnmask )
 import Graphics.UI.Internal
+import Graphics.UI.Internal.QObject ( clearQObjects )
 import System.Environment
 import System.IO.Unsafe
-
-data QObject
-data QEvent
 
 foreign import ccall safe run_qt :: CInt -> Ptr (Ptr CChar) -> IO ()
 
@@ -37,7 +42,21 @@ qtActive :: IORef Bool
 qtActive = unsafePerformIO $ newIORef False
 {-# NOINLINE qtActive #-}
 
-runUI :: MonadIO m => (forall s. Event -> UIAction s ()) -> m ()
+-- | Initializes the user interface and starts the event loop. There can only
+-- be one UI instance per process.
+--
+-- You should use the `Ready` event you will receive in the event handler to
+-- initialize whatever user interface you want.
+--
+-- If you interrupt `runUI` with an exception (asynchronous or just ordinary
+-- synchronous exception that you don't catch) the whole UI will be shut down.
+--
+-- Asynchronous exceptions are unlikely to get through easily to the thread
+-- that is running `runUI`. If you need to stop the UI, use `stopUI` which will
+-- work from any thread.
+runUI :: MonadIO m
+      => (forall s. Event -> UIAction s ()) -- ^ Receives global events.
+      -> m ()
 runUI callback' = liftIO $ runInBoundThread $ mask $ \restore -> do
     ok <- atomicModifyIORef' qtActive $ \old ->
         if old
@@ -47,24 +66,34 @@ runUI callback' = liftIO $ runInBoundThread $ mask $ \restore -> do
 
     flip finally (writeIORef qtActive False >>
                   writeIORef activeCallback Nothing >>
-                  writeIORef topReferences S.empty) $ do
+                  writeIORef restoreFunction id >>
+                  clearQObjects) $ do
         writeIORef activeCallback (Just callback)
+        writeIORef pendingException Nothing
+        writeIORef restoreFunction restore
         args <- getArgs
         prog <- getProgName
         let params = args ++ [prog]
         withStringArray params $ run_qt (fromIntegral $ length params)
+        readIORef pendingException >>= \case
+            Just exc -> writeIORef pendingException Nothing >> throwM exc
+            Nothing -> return ()
   where
     callback = fmap (insulateExceptions . unsafeUnwrapUIAction) callback'
 
-deleteUIElement :: UIElement a => a -> UIAction s ()
+-- | Stops `runUI`, whatever thread it may be running in. Does nothing if there
+-- is no UI running.
+stopUI :: IO ()
+stopUI = application_quit
+
+-- | Deletes an element. See `UIElement`.
+deleteUIElement :: UIElement a s => a -> UIAction s ()
 deleteUIElement thing = UIAction $ delete thing
 
 withStringArray :: [String] -> (Ptr (Ptr CChar) -> IO a) -> IO a
 withStringArray strings action =
     recursive strings []
   where
-    num_strings = length strings
-
     recursive [] pointers = withArray (reverse pointers) action
     recursive (str:rest) pointers =
         withCString str $ \cstr -> recursive rest (cstr:pointers)

@@ -11,7 +11,7 @@ HaskellEventGlue::~HaskellEventGlue()
 {
 }
 
-bool HaskellEventGlue::eventFilter( QObject* obj, QEvent* event )
+bool HaskellEventGlue::eventFilter( QObject*, QEvent* )
 {
     return false;
 }

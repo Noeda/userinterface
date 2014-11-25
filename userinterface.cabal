@@ -16,18 +16,25 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Graphics.UI
                        Graphics.UI.Internal
+                       Graphics.UI.Internal.CentralWidgetable
+                       Graphics.UI.Internal.Common
                        Graphics.UI.Internal.Touchable
                        Graphics.UI.Internal.QObject
                        Graphics.UI.Internal.QTypes
                        Graphics.UI.Internal.QString
                        Graphics.UI.MainWindow
+                       Graphics.UI.MdiArea
                        Graphics.UI.MenuBar
+                       Graphics.UI.TextEdit
                        Graphics.UI.Timer
+                       Graphics.UI.UIVar
   build-depends:       base >=4.7 && <5.0
+                      ,byteorder >=1.0.4 && <2.0
                       ,bytestring >=0.10.4 && <1.0
                       ,containers >=0.5.5 && <1.0
                       ,exceptions >=0.6.1 && <1.0
                       ,lens >=4.6 && <5.0
+                      ,profunctors >=4.3.2 && <5.0
                       ,text >=1.2 && <2.0
                       ,transformers >=0.4 && <1.0
   hs-source-dirs:      src
@@ -37,10 +44,11 @@ library
 executable smoke-test
   main-is:             Main.hs
   build-depends:       base >=4.7 && <5.0
+                      ,exceptions >=0.6.1 && <1.0
                       ,userinterface
                       ,text >=1.2 && <2.0
                       ,transformers >=0.4 && <1.0
   hs-source-dirs:      smoke-test
-  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 
