@@ -4,7 +4,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | MDI area widget.
+-- | MDI area widget. MDI applications have their own \"desktop\" that in turn
+-- has smaller windows.
 --
 
 module Graphics.UI.MdiArea
