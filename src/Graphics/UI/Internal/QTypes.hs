@@ -1,6 +1,7 @@
 module Graphics.UI.Internal.QTypes where
 
 data QAction
+data QDockWidget
 data QMainWindow
 data QMdiArea
 data QMdiSubWindow

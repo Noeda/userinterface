@@ -35,6 +35,7 @@ instance HasCommonQObject (MainWindow s) s QMainWindow where
 
 instance UIElement (MainWindow s) s where
     delete = deleteCommonQObject . getCommonQObject
+    qwidget = castCommonQObject . getCommonQObject
 
 -- | Creates a main window and shows it.
 --

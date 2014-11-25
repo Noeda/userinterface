@@ -15,6 +15,15 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Graphics.UI
+                       Graphics.UI.DockWidget
+                       Graphics.UI.MainWindow
+                       Graphics.UI.MdiArea
+                       Graphics.UI.MenuBar
+                       Graphics.UI.TextEdit
+                       Graphics.UI.Timer
+                       Graphics.UI.UIVar
+                       Graphics.UI.Widget
+
                        Graphics.UI.Internal
                        Graphics.UI.Internal.CentralWidgetable
                        Graphics.UI.Internal.Common
@@ -22,12 +31,6 @@ library
                        Graphics.UI.Internal.QObject
                        Graphics.UI.Internal.QTypes
                        Graphics.UI.Internal.QString
-                       Graphics.UI.MainWindow
-                       Graphics.UI.MdiArea
-                       Graphics.UI.MenuBar
-                       Graphics.UI.TextEdit
-                       Graphics.UI.Timer
-                       Graphics.UI.UIVar
   build-depends:       base >=4.7 && <5.0
                       ,byteorder >=1.0.4 && <2.0
                       ,bytestring >=0.10.4 && <1.0

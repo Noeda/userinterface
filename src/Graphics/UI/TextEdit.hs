@@ -32,6 +32,7 @@ instance HasCommonQObject (TextEdit s) s QTextEdit where
 
 instance UIElement (TextEdit s) s where
     delete = deleteCommonQObject . getCommonQObject
+    qwidget = castCommonQObject . getCommonQObject
 
 instance CentralWidgetable (TextEdit s) s QTextEdit where
     centralWidgetableProof _ = ()

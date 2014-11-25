@@ -12,6 +12,8 @@ import Control.Monad.IO.Class
 import Data.IORef
 import Data.Typeable
 import Foreign.Ptr
+import Graphics.UI.Internal.QObject
+import Graphics.UI.Internal.QTypes
 import System.IO.Unsafe
 
 foreign import ccall "wrapper" wrapIO :: IO () -> IO (FunPtr (IO ()))
@@ -52,6 +54,8 @@ insulateExceptions action = mask $ \restore -> do
 class UIElement a s | a -> s where
     -- | Deletes an element. Don't use this, use `Graphics.UI.deleteUIElement`.
     delete :: a -> IO ()
+    -- | Returns the underlying widget of the element.
+    qwidget :: a -> CommonQObject s QWidget
 
 eventHandler :: Event -> IO ()
 eventHandler event = do

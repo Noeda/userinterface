@@ -38,9 +38,11 @@ instance HasCommonQObject (MenuBar s) s QMenuBar where
 
 instance UIElement (MenuBar s) s where
     delete = deleteCommonQObject . getCommonQObject
+    qwidget = castCommonQObject . getCommonQObject
 
 instance UIElement (Menu s) s where
     delete = deleteCommonQObject . getCommonQObject
+    qwidget = castCommonQObject . getCommonQObject
 
 data Menu s where
     Menu :: MenuParent a s => CommonQObject s QMenu -> a -> Menu s

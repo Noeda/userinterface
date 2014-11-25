@@ -33,12 +33,14 @@ instance HasCommonQObject (MdiSubWindow s) s QMdiSubWindow where
 
 instance UIElement (MdiSubWindow s) s where
     delete = deleteCommonQObject . getCommonQObject
+    qwidget = castCommonQObject . getCommonQObject
 
 instance HasCommonQObject (MdiArea s) s QMdiArea where
     getCommonQObject = mdiAreaPtr
 
 instance UIElement (MdiArea s) s where
     delete = deleteCommonQObject . getCommonQObject
+    qwidget = castCommonQObject . getCommonQObject
 
 instance CentralWidgetable (MdiArea s) s QMdiArea where
     centralWidgetableProof _ = ()
@@ -56,6 +58,9 @@ createMdiArea = liftIO $ mask_ $ do
 --
 -- The subwidget is deleted if the MDI area is deleted or if the user clicks on
 -- the close button.
+--
+-- Consequences are undefined if you attempt to add the subwidget to another UI
+-- construct after this.
 addSubWidget :: forall a s b. (UIElement a s, CentralWidgetable a s b)
              => a
              -> MdiArea s
