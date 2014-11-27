@@ -7,8 +7,8 @@
 extern "C" {
     // exports
     QMenuBar* create_menubar( void );
-    QMenu* create_menu( QString* str );
-    void add_menubar_menu( QMenuBar* menubar, QMenu* menu );
+    QMenu* add_menubar_menu( QMenuBar* menubar, QString* title );
+    QMenu* add_menu_menu( QMenu* menu_parent, QString* title );
     void add_menu_action( QMenu* menu
                         , QString* name
                         , void (*hsTrigger)(void) );
@@ -22,14 +22,14 @@ QMenuBar* create_menubar( void )
     return new QMenuBar;
 }
 
-QMenu* create_menu( QString* str )
+QMenu* add_menubar_menu( QMenuBar* menubar, QString* title )
 {
-    return new QMenu( *str );
+    return menubar->addMenu( *title );
 }
 
-void add_menubar_menu( QMenuBar* menubar, QMenu* menu )
+QMenu* add_menu_menu( QMenu* menu_parent, QString* title )
 {
-    menubar->addMenu( menu );
+    return menu_parent->addMenu( *title );
 }
 
 void add_menu_action( QMenu* menu

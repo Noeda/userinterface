@@ -1,3 +1,4 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE AutoDeriveTypeable #-}
@@ -13,8 +14,10 @@ module Graphics.UI.MainWindow
     where
 
 import Control.Applicative
+import Control.Monad
 import Graphics.UI.Internal.Common
 import Graphics.UI.MdiArea
+import Graphics.UI.Widget
 
 foreign import ccall create_main_window :: IO (Ptr QMainWindow)
 foreign import ccall set_central_widget :: Ptr QMainWindow
@@ -24,18 +27,22 @@ foreign import ccall take_central_widget :: Ptr QMainWindow
                                          -> IO (Ptr QWidget)
 foreign import ccall show_widget :: Ptr QWidget -> IO ()
 
-newtype MainWindow s = MainWindow (CommonQObject s QMainWindow)
-                       deriving ( Eq, Typeable )
+newtype MainWindow s = MainWindow (ManagedQObject QMainWindow)
+                       deriving ( Eq, Typeable
+                                , HasQObject
+                                , Touchable )
 
-instance Touchable (MainWindow s) where
-    touch (MainWindow cqo) = touch cqo
+instance HasManagedQObject (MainWindow s) QMainWindow where
+    getManagedQObject (MainWindow man) = man
 
-instance HasCommonQObject (MainWindow s) s QMainWindow where
-    getCommonQObject (MainWindow cobject) = cobject
+instance Titleable (MainWindow s) s where
+    getWidget = coerceManagedQObject . getManagedQObject
 
-instance UIElement (MainWindow s) s where
-    delete = deleteCommonQObject . getCommonQObject
-    qwidget = castCommonQObject . getCommonQObject
+--instance HasCommonQObject (MainWindow s) s QMainWindow where
+--    getCommonQObject (MainWindow cobject) = cobject
+
+--instance UIElement (MainWindow s) s where
+--    delete = deleteCommonQObject . getCommonQObject
 
 -- | Creates a main window and shows it.
 --
@@ -48,24 +55,21 @@ instance UIElement (MainWindow s) s where
 createMainWindow :: UIAction s (MainWindow s)
 createMainWindow = liftIO $ mask_ $ do
     w <- create_main_window
-    ret <- MainWindow <$> addCommonQObject w staysAliveByItself "QMainWindow"
+    mwindow <- MainWindow <$> (manageQObject =<< createRoot w)
     unsafeUnwrapUIAction $ do
         mdi <- createMdiArea
-        setCentralWidget mdi ret
+        setCentralWidget mdi mwindow
     show_widget (castPtr w)
-    return ret
+    return mwindow
 
 -- | Sets a central widget to a main window.
 --
 -- The widget becomes a child of the window and is deleted if the main window
 -- is deleted.
 setCentralWidget :: CentralWidgetable a s b => a -> MainWindow s -> UIAction s ()
-setCentralWidget (getCommonQObject -> central_cobject)
-                 (MainWindow cobject) = liftIO $ mask_ $
-    withCommonQObject cobject $ \mainwindow_ptr ->
-        withCommonQObject central_cobject $ \child_tr -> do
-            taken_qobject <- take_central_widget mainwindow_ptr
+setCentralWidget central_object mwindow = mask_ $ liftIO $
+    withManagedQObject mwindow $ \mainwindow_ptr ->
+        withManagedQObject central_object $ \child_tr -> do
+            void $ take_central_widget mainwindow_ptr
             set_central_widget mainwindow_ptr (castPtr child_tr)
-            removeChildIfExists mainwindow_ptr taken_qobject
-            addChild mainwindow_ptr child_tr (parentKeepsAlive central_cobject)
 

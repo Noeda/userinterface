@@ -13,9 +13,8 @@ module Graphics.UI
     , UIAction()
     -- * Global events
     , Event(..)
-    -- * Deleting elements
-    , deleteUIElement
-    , UIElement() )
+    -- * Deleting UI elements promptly
+    , Deleteable(..) )
     where
 
 import Control.Concurrent
@@ -28,11 +27,12 @@ import Foreign.C.Types
 import Foreign.Marshal.Array
 import Foreign.Ptr
 import Graphics.UI.Internal
-import Graphics.UI.Internal.QObject ( clearQObjects )
+import Graphics.UI.Internal.QObject ( garbageCollectionCycle, Deleteable(..) )
 import System.Environment
 import System.IO.Unsafe
 
-foreign import ccall safe run_qt :: CInt -> Ptr (Ptr CChar) -> IO ()
+foreign import ccall safe run_qt
+    :: CInt -> Ptr (Ptr CChar) -> FunPtr (IO ()) -> IO ()
 
 --foreign export ccall eventCallback :: Ptr QObject -> Ptr QEvent -> IO CInt
 foreign export ccall aboutToQuitMsg :: IO ()
@@ -66,15 +66,18 @@ runUI callback' = liftIO $ runInBoundThread $ mask $ \restore -> do
 
     flip finally (writeIORef qtActive False >>
                   writeIORef activeCallback Nothing >>
-                  writeIORef restoreFunction id >>
-                  clearQObjects) $ do
+                  writeIORef restoreFunction id) $ do
         writeIORef activeCallback (Just callback)
         writeIORef pendingException Nothing
         writeIORef restoreFunction restore
         args <- getArgs
         prog <- getProgName
         let params = args ++ [prog]
-        withStringArray params $ run_qt (fromIntegral $ length params)
+        withStringArray params $ \arr -> do
+            gc <- wrapIO $ insulateExceptions garbageCollectionCycle
+            run_qt (fromIntegral $ length params)
+                   arr
+                   gc
         readIORef pendingException >>= \case
             Just exc -> writeIORef pendingException Nothing >> throwM exc
             Nothing -> return ()
@@ -87,8 +90,8 @@ stopUI :: IO ()
 stopUI = application_quit
 
 -- | Deletes an element. See `UIElement`.
-deleteUIElement :: UIElement a s => a -> UIAction s ()
-deleteUIElement thing = UIAction $ delete thing
+{-deleteUIElement :: UIElement a s => a -> UIAction s ()
+deleteUIElement thing = UIAction $ delete thing-}
 
 withStringArray :: [String] -> (Ptr (Ptr CChar) -> IO a) -> IO a
 withStringArray strings action =

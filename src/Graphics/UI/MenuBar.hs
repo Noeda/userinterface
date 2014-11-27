@@ -1,4 +1,7 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE AutoDeriveTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -23,80 +26,56 @@ import Graphics.UI.Internal.Common
 import Graphics.UI.MainWindow
 
 foreign import ccall create_menubar :: IO (Ptr QMenuBar)
-foreign import ccall create_menu :: Ptr QString -> IO (Ptr QMenu)
-foreign import ccall add_menubar_menu :: Ptr QMenuBar -> Ptr QMenu -> IO ()
+foreign import ccall add_menubar_menu :: Ptr QMenuBar -> Ptr QString -> IO (Ptr QMenu)
+foreign import ccall add_menu_menu :: Ptr QMenu -> Ptr QString -> IO (Ptr QMenu)
 foreign import ccall set_menubar :: Ptr QMainWindow -> Ptr QMenuBar -> IO ()
 foreign import ccall add_menu_action ::
     Ptr QMenu -> Ptr QString -> FunPtr (IO ()) -> IO ()
 
-data MenuBar s = MenuBar { menuBarPtr :: CommonQObject s QMenuBar
-                         , mainWindow :: MainWindow s }
-                 deriving ( Eq, Typeable )
+newtype MenuBar s = MenuBar (ManagedQObject QMenuBar)
+                    deriving ( Eq, Typeable, HasQObject, Touchable )
 
-instance HasCommonQObject (MenuBar s) s QMenuBar where
-    getCommonQObject = menuBarPtr
+newtype Menu s = Menu (ManagedQObject QMenu)
+                 deriving ( Eq, Typeable, HasQObject, Touchable )
 
-instance UIElement (MenuBar s) s where
-    delete = deleteCommonQObject . getCommonQObject
-    qwidget = castCommonQObject . getCommonQObject
+instance HasManagedQObject (MenuBar s) QMenuBar where
+    getManagedQObject (MenuBar man) = man
 
-instance UIElement (Menu s) s where
-    delete = deleteCommonQObject . getCommonQObject
-    qwidget = castCommonQObject . getCommonQObject
+instance HasManagedQObject (Menu s) QMenu where
+    getManagedQObject (Menu man) = man
 
-data Menu s where
-    Menu :: MenuParent a s => CommonQObject s QMenu -> a -> Menu s
+class HasManagedQObject a b => MenuParent a b s | a -> b s where
+    addMenu :: Proxy a -> Ptr QWidget -> Ptr QString -> IO (Ptr QMenu)
 
-instance HasCommonQObject (Menu s) s QMenu where
-    getCommonQObject (Menu coq _) = coq
+instance MenuParent (Menu s) QMenu s where
+    addMenu _ widget menu = add_menu_menu (castPtr widget) menu
 
-instance Eq (Menu s) where
-    (Menu ptr1 _) == (Menu ptr2 _) = ptr1 == ptr2
-
-class MenuParent a s where
-    toQObject :: a -> CommonQObject s QObject
-
-instance MenuParent (Menu s) s where
-    toQObject (Menu ptr _) = castCommonQObject ptr
-
-instance MenuParent (MenuBar s) s where
-    toQObject (MenuBar{..}) = castCommonQObject menuBarPtr
-
-instance Touchable (Menu s) where
-    touch (Menu cqo _) = touch cqo
-
-instance Touchable (MenuBar s) where
-    touch (MenuBar cqo _) = touch cqo
+instance MenuParent (MenuBar s) QMenuBar s where
+    addMenu _ widget menu = add_menubar_menu (castPtr widget) menu
 
 -- | Creates a menu bar.
 createMenuBar :: MainWindow s -> UIAction s (MenuBar s)
 createMenuBar mainwindow = liftIO $ mask_ $
-    withCommonQObject mainwindow $ \window_ptr -> do
+    withManagedQObject mainwindow $ \window_ptr -> do
         mbar <- create_menubar
         set_menubar window_ptr mbar
-        cobject <- addCommonQObject mbar Nothing "QMenuBar"
-        addChild window_ptr mbar (parentKeepsAlive cobject)
-        return $ MenuBar { menuBarPtr = cobject
-                         , mainWindow = mainwindow }
+        MenuBar <$> (manageQObject =<< createTrackedQObject mbar)
 
 -- | Creates a menu and puts it in a menu bar.
-createMenu :: T.Text -> MenuBar s -> UIAction s (Menu s)
-createMenu title mb = liftIO $ do
-    asQString title $ \qstring -> withCommonQObject mb $ \parent -> do
-        menu <- create_menu qstring
-        add_menubar_menu parent menu
-        cobject <- addCommonQObject menu Nothing "QMenu"
-        addChild parent menu (parentKeepsAlive cobject)
-        return $ Menu cobject mb
+createMenu :: forall a b s. MenuParent a b s => T.Text -> a -> UIAction s (Menu s)
+createMenu title parent_widget = liftIO $ do
+    asQString title $ \qstring -> withManagedQObject parent_widget $ \parent -> do
+        menu <- addMenu (Proxy :: Proxy a) (castPtr parent) qstring
+        Menu <$> (manageQObject =<< createTrackedQObject menu)
 
 -- | Adds an action to a menu.
 addMenuAction :: T.Text           -- ^ The text on the action.
               -> Menu s           -- ^ Where to add the action.
               -> UIAction s ()    -- ^ Called when the action is selected.
               -> UIAction s ()
-addMenuAction title (Menu cobject _) (UIAction (insulateExceptions -> action)) = liftIO $ mask_ $
+addMenuAction title menu (UIAction (insulateExceptions -> action)) = liftIO $ mask_ $
     asQString title $ \qstring -> do
-        withCommonQObject cobject $ \ptr -> do
+        withManagedQObject menu $ \ptr -> do
             wrapped <- wrapIO action  -- cleaned up by Qt
             add_menu_action ptr qstring wrapped
 

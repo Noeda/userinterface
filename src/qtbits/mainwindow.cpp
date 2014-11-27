@@ -14,8 +14,7 @@ extern "C" {
 
     QMdiArea* create_mdiarea( void );
     QMdiSubWindow* add_subwindow( QMdiArea* mdi
-                                , QWidget* widget
-                                , void (*destroy_callback)(void) );
+                                , QWidget* widget );
 };
 
 QMainWindow* create_main_window( void )
@@ -54,13 +53,9 @@ QWidget* take_central_widget( QMainWindow* window )
 }
 
 QMdiSubWindow* add_subwindow( QMdiArea* mdi
-                            , QWidget* widget
-                            , void (*destroy_callback)(void) )
+                            , QWidget* widget )
 {
     QMdiSubWindow* sub = mdi->addSubWindow( widget );
-    HaskellAction* ha = new HaskellAction( (QObject*) sub, destroy_callback );
-    QObject::connect( (QObject*) sub, SIGNAL(destroyed())
-                    , ha, SLOT(trigger()) );
     QObject::connect( (QObject*) widget, SIGNAL(destroyed())
                     , (QObject*) sub, SLOT(deleteLater()) );
     sub->show();

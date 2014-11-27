@@ -1,3 +1,4 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE AutoDeriveTypeable #-}
@@ -12,9 +13,9 @@ module Graphics.UI.DockWidget
     , DockWidget() )
     where
 
-import Control.Concurrent
 import Graphics.UI.Internal.Common
 import Graphics.UI.MainWindow
+import Graphics.UI.Widget
 
 foreign import ccall create_dockwidget
     :: Ptr QMainWindow
@@ -22,15 +23,14 @@ foreign import ccall create_dockwidget
     -> FunPtr (IO ())
     -> IO (Ptr QDockWidget)
 
-newtype DockWidget s = DockWidget { dockWidgetPtr :: CommonQObject s QDockWidget }
-                       deriving ( Eq, Typeable )
+newtype DockWidget s = DockWidget (ManagedQObject QDockWidget)
+                       deriving ( Eq, Typeable, HasQObject, Touchable )
 
-instance HasCommonQObject (DockWidget s) s QDockWidget where
-    getCommonQObject = dockWidgetPtr
+instance HasManagedQObject (DockWidget s) QDockWidget where
+    getManagedQObject (DockWidget man) = man
 
-instance UIElement (DockWidget s) s where
-    delete = deleteCommonQObject . getCommonQObject
-    qwidget = castCommonQObject . getCommonQObject
+instance Titleable (DockWidget s) s where
+    getWidget = coerceManagedQObject . getManagedQObject
 
 -- | Creates a dock widget and attaches it to a main window.
 --
@@ -39,29 +39,15 @@ instance UIElement (DockWidget s) s where
 --
 -- Consequences are undefined if you attempt to add the subwidget to another UI
 -- construct after this.
-createDockWidget :: forall a s b. (UIElement a s, CentralWidgetable a s b)
+createDockWidget :: forall a s b. (CentralWidgetable a s b)
                  => MainWindow s
                  -> a   -- ^ What to show inside the dock widget.
                  -> UIAction s (DockWidget s)
 createDockWidget mainwindow child_widget = liftIO $ mask_ $ do
-    withCommonQObject mainwindow $ \mainwindow_ptr -> do
-        withCommonQObject child_widget $ \child_ptr -> do
-            mvar <- newEmptyMVar
-            ac <- wrapAndInsulateIO $ do
-                ob <- takeMVar mvar
-                delete ob
+    withManagedQObject mainwindow $ \mainwindow_ptr -> do
+        withManagedQObject child_widget $ \child_ptr -> do
+            ac <- wrapAndInsulateIO $ return ()
             dockwidget_ptr <- create_dockwidget mainwindow_ptr (castPtr child_ptr) ac
-            dockwidget_cobject <- addCommonQObject dockwidget_ptr Nothing "QDockWidget"
-            let dockwidget = DockWidget dockwidget_cobject
-            putMVar mvar dockwidget
-
-            addChild mainwindow_ptr dockwidget_ptr
-                     (parentKeepsAlive $
-                      castCommonQObject $
-                      getCommonQObject dockwidget)
-            addChild dockwidget_ptr child_ptr
-                     (parentKeepsAlive $
-                      castCommonQObject $
-                      getCommonQObject child_widget)
-            return dockwidget
+            dockwidget_cobject <- manageQObject =<< createTrackedQObject dockwidget_ptr
+            return $ DockWidget dockwidget_cobject
 

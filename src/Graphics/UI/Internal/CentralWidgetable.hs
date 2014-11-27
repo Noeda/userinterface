@@ -10,6 +10,6 @@ import Graphics.UI.Internal.QObject
 
 -- | Things that can be the central widget to a main window or a subwidget to
 -- an MDI area.
-class HasCommonQObject a s b => CentralWidgetable a s b | a -> s b where
+class HasManagedQObject a b => CentralWidgetable a s b | a -> s b where
     centralWidgetableProof :: Proxy a -> ()
 

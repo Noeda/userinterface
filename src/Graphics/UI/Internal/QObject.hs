@@ -1,204 +1,303 @@
-{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE AutoDeriveTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE PolyKinds #-}
 {-# OPTIONS_GHC -fno-warn-unused-binds #-}
 
 module Graphics.UI.Internal.QObject
-    ( addQObject
-    , clearQObjects
-    , deleteQObject
-    , deleteCommonQObject
-    , defaultFinalizer
-    , CommonQObject()
-    , Holder()
-    , parentKeepsAlive
-    , withCommonQObject
-    , addChild
-    , castCommonQObject
-    , HasCommonQObject(..)
-    , addCommonQObject
-    , removeChildIfExists
-    , staysAliveByItself
-    , monitor )
+    ( ManagedQObject()
+    , coerceManagedQObject
+    , createRoot
+    , createTrackedQObject
+    , Deleteable(..)
+    , unRoot
+    , manageQObject
+    , withManagedQObject
+    , garbageCollectionCycle
+    , HasManagedQObject(..)
+    , HasQObject(..) )
     where
 
-import Control.Concurrent
-import Control.Lens hiding ( children )
+import Control.Applicative
+import Control.Concurrent.STM
+import Control.Lens
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State.Strict
+import Data.Foldable
 import Data.IORef
 import qualified Data.Map.Strict as M
-import Data.Monoid
-import Data.Foldable
-import Data.Text ( Text )
-import qualified Data.Text as T
+import Data.Maybe
+import qualified Data.Set as S
+import Data.Traversable
 import Data.Typeable
+import Foreign.C.Types
+import Foreign.Marshal.Array
 import Foreign.Ptr
-import Graphics.UI.Internal.Touchable
 import Graphics.UI.Internal.QTypes
+import Graphics.UI.Internal.Touchable
 import System.IO.Unsafe
-import Unsafe.Coerce
 
+foreign import ccall "wrapper" wrapIO :: IO () -> IO (FunPtr (IO ()))
+foreign import ccall link_destroy_event :: Ptr QObject -> (FunPtr (IO ())) -> IO ()
 foreign import ccall post_delete_event :: Ptr QObject -> IO ()
+foreign import ccall get_qobject_parent :: Ptr QObject -> IO (Ptr QObject)
+foreign import ccall number_of_qobject_children :: Ptr QObject -> IO CInt
+foreign import ccall get_qobject_children ::
+    Ptr QObject -> (Ptr (Ptr QObject)) -> IO ()
 
-data QObjectWorld = QObjectWorld
-    { _qobjects :: !(M.Map (Ptr QObject) QObjectInfo) }
+data Visitation = Visitation
+    { _toBeVisited :: S.Set (Ptr QObject)
+    , _visited :: S.Set (Ptr QObject) }
+makeLenses ''Visitation
 
-data QObjectInfo = QObjectInfo
-    { _children :: !(M.Map (Ptr QObject) (IO ()))
-    , _debugName :: !T.Text
-    , _parent :: !(Ptr QObject)
-    , _holder :: !(IO ())
-    , _invalidators :: [IO ()] }
-makeLenses ''QObjectWorld
-makeLenses ''QObjectInfo
+class HasQObject a where
+    getQObject :: a -> TVar (Ptr QObject)
 
-globalQObjectWorld :: MVar QObjectWorld
-globalQObjectWorld = unsafePerformIO $ newMVar $ QObjectWorld M.empty
-{-# NOINLINE globalQObjectWorld #-}
+instance HasQObject (TVar (Ptr QObject)) where
+    getQObject = id
 
-clearQObjects :: IO ()
-clearQObjects = mask_ $ modifyMVar_ globalQObjectWorld $ \_ ->
-    return $ QObjectWorld M.empty
+class Deleteable a where
+    delete :: MonadIO m => a -> m ()
 
-monitor :: IO ()
-monitor = void $ forkIO $ forever $ do
-    world <- (M.assocs . _qobjects) `fmap` readMVar globalQObjectWorld
-    putStrLn "-start-"
-    for_ world $ \(ptr, oinfo) ->
-        print (ptr, _debugName oinfo, (M.keys $ _children oinfo), length (_invalidators oinfo))
-    putStrLn "-end-"
-    threadDelay 100000
+instance HasQObject a => Deleteable a where
+    delete = liftIO . deleteQObject . getQObject
 
-addQObject :: Ptr QObject
-           -> Ptr QObject
-           -> M.Map (Ptr QObject) (IO ())
-           -> IO ()
-           -> Maybe (IO ())
-           -> Text
-           -> IO ()
-addQObject qobject parent_ptr initial_children finalizer !givenholder name =
-    modifyMVar_ globalQObjectWorld $ \world ->
-        if M.member qobject (_qobjects world)
-          then error "addQObject: QObject already part of the world."
-          else let holding = case givenholder of
-                                 Nothing -> return ()
-                                 Just h -> h
-                in holding `seq` return world { _qobjects = M.insert qobject
-                                                   (QObjectInfo
-                                                    initial_children
-                                                    name
-                                                    parent_ptr
-                                                    holding
-                                                    [finalizer])
-                                                   (_qobjects world) }
+data ManagedQObject a = ManagedQObject
+    { _qobject :: TVar (Ptr QObject)
+    , _finalizerRef :: IORef () }
+    deriving ( Eq, Functor, Typeable )
 
-data CommonQObject s a = CommonQObject (IORef (Maybe (Ptr a))) !(IORef ())
-                         deriving ( Eq, Typeable )
+coerceManagedQObject :: ManagedQObject a -> ManagedQObject b
+coerceManagedQObject (ManagedQObject{..}) = ManagedQObject
+    { _qobject = _qobject
+    , _finalizerRef = _finalizerRef }
 
-deleteCommonQObject :: CommonQObject s a -> IO ()
-deleteCommonQObject (CommonQObject ref _) = mask_ $
-    atomicModifyIORef' ref (\old -> ( Nothing, old )) >>= \case
-        Nothing -> return ()
-        Just ptr -> deleteQObject (castPtr ptr)
+class HasManagedQObject a b | a -> b where
+    getManagedQObject :: a -> ManagedQObject b
 
-instance Touchable (CommonQObject s a) where
-    touch (CommonQObject ref1 ref2) = touch ref1 >> touch ref2
+instance HasManagedQObject (ManagedQObject a) a where
+    getManagedQObject = id
 
-class HasCommonQObject a s b | a -> b s where
-    getCommonQObject :: a -> CommonQObject s b
+instance HasQObject (ManagedQObject a) where
+    getQObject = _qobject
 
-instance HasCommonQObject (CommonQObject s a) s a where
-    getCommonQObject = id
+instance Touchable (ManagedQObject a) where
+    touch x = touch (_finalizerRef x)
 
-castCommonQObject :: CommonQObject s a -> CommonQObject s b
-castCommonQObject = unsafeCoerce
+manageQObject :: TVar (Ptr QObject) -> IO (ManagedQObject a)
+manageQObject tvar = do
+    ref <- newIORef ()
+    void $ mkWeakIORef ref $ atomically $ do
+        ptr <- readTVar tvar
+        modifyTVar referencedRoots $ S.delete ptr
 
-withCommonQObject :: HasCommonQObject c s d
-                  => c -> (Ptr d -> IO b) -> IO b
-withCommonQObject (getCommonQObject -> CommonQObject ref touch_me) action = do
-    ptr <- readIORef ref
-    case ptr of
-        Nothing -> error "withCommonQObject: null pointer"
-        Just ptr' -> finally (action ptr') (touch touch_me)
+    return ManagedQObject {
+             _qobject = tvar
+           , _finalizerRef = ref
+           }
 
-newtype Holder = Holder (IO ())
-                 deriving ( Typeable )
+withManagedQObject :: HasManagedQObject a c => a -> (Ptr c -> IO b) -> IO b
+withManagedQObject (getManagedQObject -> x) action =
+    flip finally (touch x) $ do
+        qop <- atomically $ readTVar (getQObject x)
+        if qop == nullPtr
+          then error "withManagedQObject: QObject* is NULL."
+          else action (castPtr qop)
 
-parentKeepsAlive :: CommonQObject s a -> Holder
-parentKeepsAlive = Holder . touch
+-- Tracks QObjects. The inner TVars are those that are in CommonQObjects
+trackedQObjects :: TVar (M.Map (Ptr QObject) (TVar (Ptr QObject)))
+trackedQObjects = unsafePerformIO $ newTVarIO M.empty
+{-# NOINLINE trackedQObjects #-}
 
-removeChildIfExists :: Ptr a -> Ptr b -> IO ()
-removeChildIfExists (castPtr -> p) (castPtr -> c) =
-    modifyMVar_ globalQObjectWorld $ \world ->
-    case M.lookup p (_qobjects world) of
-        Nothing -> error "addChild: parent not in world."
-        Just _ -> case M.lookup c (_qobjects world) of
-            Nothing -> return world
-            Just _ -> return world { _qobjects =
-                M.adjust (parent .~ nullPtr) c $
-                M.adjust (children %~ M.delete c) p $ (_qobjects world) }
+-- invariant (pseudo-code):
+--
+-- S.member x garbageCollecionRoots --> M.member x trackedQObjects
+--
+-- That is, anything referenced in garbageCollectionRoots should also be in
+-- trackedQObjects. The reverse does not need to be true and isn't.
+--
 
-addChild :: Ptr a -> Ptr b -> Holder -> IO ()
-addChild (castPtr -> p) (castPtr -> c) !(Holder givenholder) =
-    modifyMVar_ globalQObjectWorld $ \world ->
-    case M.lookup p (_qobjects world) of
-        Nothing -> error $ "addChild: parent not in world." ++ show p
-        Just _ -> case M.lookup c (_qobjects world) of
-            Nothing -> error $ "addChild: child not in world. " ++ show c
-            Just cinfo -> return world { _qobjects =
-                flip execState (_qobjects world) $ do
-                    modify $ M.adjust (children %~ M.delete c) (_parent cinfo)
-                    modify $ M.adjust (parent .~ p) c
-                    modify $ M.adjust (children %~ M.insert c givenholder) p
-                }
+garbageCollectionRoots :: TVar (S.Set (Ptr QObject))
+garbageCollectionRoots = unsafePerformIO $ newTVarIO S.empty
+{-# NOINLINE garbageCollectionRoots #-}
 
-staysAliveByItself :: Maybe (IORef () -> IO (IO ()))
-staysAliveByItself = Just $ \ref -> return $ touch ref
+referencedRoots :: TVar (S.Set (Ptr QObject))
+referencedRoots = unsafePerformIO $ newTVarIO S.empty
+{-# NOINLINE referencedRoots #-}
 
-addCommonQObject :: Ptr a -> Maybe (IORef () -> IO (IO ())) -> Text -> IO (CommonQObject s a)
-addCommonQObject ptr toucher_gen name = mask_ $ do
-    ref <- newIORef (Just ptr)
-    finalizerRef <- newIORef ()
-    toucher <- case toucher_gen of
-        Nothing -> return Nothing
-        Just fun -> Just `fmap` fun finalizerRef
-    toucher `seq` addQObject
-                  (castPtr ptr)
-                  nullPtr
-                  mempty
-                  (writeIORef ref Nothing >> defaultFinalizer (castPtr ptr))
-                  toucher
-                  name
-    let common_ob = CommonQObject ref finalizerRef
-    void $ mkWeakIORef finalizerRef $ deleteCommonQObject common_ob
-    return common_ob
+emptyVisitation :: Visitation
+emptyVisitation = Visitation S.empty S.empty
 
-defaultFinalizer :: Ptr QObject -> IO ()
-defaultFinalizer = post_delete_event
+-- | Adds a root. The pointer should equal the pointer inside the TVar.
+--
+-- Also adds it as a tracked QObject so no need to call `addTrackedQObject`.
+addRoot :: Ptr QObject -> TVar (Ptr QObject) -> STM ()
+addRoot pointer tvar_root = do
+    modifyTVar trackedQObjects (M.insert pointer tvar_root)
+    modifyTVar garbageCollectionRoots (S.insert pointer)
+    modifyTVar referencedRoots (S.insert pointer)
 
-deleteQObject :: Ptr QObject -> IO ()
-deleteQObject qobject = mask_ $ modifyMVar_ globalQObjectWorld $ \world ->
-    execStateT (deleter qobject) world
+-- | Adds a tracked QObject. It will be automatically deleted when deleted from
+-- Qt's side. (The TVar will be set to null when this happens).
+addTrackedQObject :: Ptr QObject -> TVar (Ptr QObject) -> STM ()
+addTrackedQObject pointer tvar_root = do
+    modifyTVar trackedQObjects (M.insert pointer tvar_root)
+    modifyTVar referencedRoots (S.insert pointer)
 
-deleter :: Ptr QObject -> StateT QObjectWorld IO ()
-deleter qobject = do
-    qobs <- use qobjects
-    case M.lookup qobject qobs of
-        Nothing -> error "deleteQObject: QObject not part of the world."
-        Just oinfo -> do
-            qobjects.at (_parent oinfo)._Just.children %= M.delete qobject
-            for_ (M.keys $ _children oinfo) deleter
-            for_ (_invalidators oinfo) $ \invalidator ->
-                liftIO $ void (try invalidator :: IO (Either SomeException ()))
-            qobjects %= M.delete qobject
+unRoot :: TVar (Ptr QObject) -> IO ()
+unRoot tvar = atomically $ do
+    p <- readTVar tvar
+    unless (p == nullPtr) $ do
+        modifyTVar garbageCollectionRoots $ S.delete p
+
+-- | A helper function to turn a Ptr QObject into a root and a tvar.
+createRoot :: Ptr a -> IO (TVar (Ptr QObject))
+createRoot (castPtr -> pointer) = mask_ $ do
+    tvar <- atomically $ do
+        tvar <- newTVar pointer
+        addRoot pointer tvar
+        return tvar
+    trigger <- wrapIO $ objectGotDestroyed tvar
+    link_destroy_event pointer trigger
+    return tvar
+
+-- | A helper function to turn a Ptr QObject into a tracked QObject.
+createTrackedQObject :: Ptr a -> IO (TVar (Ptr QObject))
+createTrackedQObject (castPtr -> pointer) = mask_ $ do
+    tvar <- atomically $ do
+        tvar <- newTVar pointer
+        addTrackedQObject pointer tvar
+        return tvar
+    trigger <- wrapIO $ objectGotDestroyed tvar
+    link_destroy_event pointer trigger
+    return tvar
+
+deleteQObject :: TVar (Ptr QObject) -> IO ()
+deleteQObject tvar = (=<<) maybeDeleteIt $ atomically $ do
+    ptr <- readTVar tvar
+    unless (ptr == nullPtr) $ do
+        modifyTVar garbageCollectionRoots $ S.delete ptr
+        modifyTVar trackedQObjects $ M.delete ptr
+        modifyTVar referencedRoots $ S.delete ptr
+    return $ if ptr == nullPtr
+      then Nothing
+      else Just ptr
+  where
+    maybeDeleteIt Nothing = return ()
+    maybeDeleteIt (Just ptr) = post_delete_event ptr
+
+whenDebugging :: IO () -> IO ()
+whenDebugging action = action
+
+showGCStats :: String -> IO ()
+showGCStats prelude = do
+    putStrLn prelude
+    roots <- atomically $ readTVar garbageCollectionRoots
+    putStrLn $ "Roots (" ++ show (S.size roots) ++ ") : " ++ show roots
+    refs <- atomically $ readTVar referencedRoots
+    putStrLn $ "References (" ++ show (S.size refs) ++ ") : " ++ show refs
+    tracked <- fmap (filter (/= nullPtr) . M.elems) $ atomically $ do
+        tracked <- readTVar trackedQObjects
+        for tracked $ readTVar
+    putStrLn $ "Tracked QObjects (" ++ show (length tracked) ++ ") : " ++ show tracked
+
+garbageCollectionCycle :: IO ()
+garbageCollectionCycle = mask_ $ do
+    whenDebugging $ showGCStats "---garbageCollectionCycle START---"
+
+    -- remove objects that are already dead
+    removeDeadTrackedObjects
+
+    roots <- atomically $ S.union <$> readTVar garbageCollectionRoots <*>
+                                      readTVar referencedRoots
+    -- collect objects that are alive by roots
+    alive <- _visited <$>
+             execStateT collectAliveObjects emptyVisitation {
+                                            _toBeVisited = roots
+                                            }
+
+    dead_pointers <- atomically $ do
+        tracked_objects <- readTVar trackedQObjects
+        -- so these must be dead? or to be killed
+        let dead = M.keysSet tracked_objects `S.difference` alive
+        -- bring out your dead!
+        the_dead <- S.fromList . catMaybes <$>
+                    traverse
+                    (\ptr -> do
+                        case M.lookup ptr tracked_objects of
+                            Nothing -> return Nothing
+                            Just tvar -> do
+                                r <- readTVar tvar
+                                writeTVar tvar nullPtr
+                                return $ Just r)
+                    (S.toList dead)
+        writeTVar trackedQObjects $ M.difference tracked_objects
+                                                 (M.fromSet (const ()) dead)
+        return the_dead
+
+    for_ dead_pointers post_delete_event
+
+    whenDebugging $ showGCStats "---garbageCollectionCycle END---"
+
+collectAliveObjects :: StateT Visitation IO ()
+collectAliveObjects = do
+    what_to_visit <- use toBeVisited
+    unless (S.null what_to_visit) $ do
+        let visit_this = S.elemAt 0 what_to_visit
+        toBeVisited %= S.delete visit_this
+        visited %= S.insert visit_this
+        visit visit_this
+        collectAliveObjects
+  where
+    visit thing = do
+        num_children <- liftIO $ number_of_qobject_children thing
+        when (num_children > 0) $ do
+            kids <- liftIO $ allocaArray (fromIntegral num_children) $ \arr -> do
+                get_qobject_children thing arr
+                peekArray (fromIntegral num_children) arr
+            traverse_ scheduleVisitIfNotVisited kids
+        parent <- liftIO $ get_qobject_parent thing
+        when (parent /= nullPtr) $
+            scheduleVisitIfNotVisited parent
+
+    scheduleVisitIfNotVisited visit_me = do
+        already_visited <- use visited
+        unless (S.member visit_me already_visited) $
+            toBeVisited %= S.insert visit_me
+
+removeDeadTrackedObjects :: IO ()
+removeDeadTrackedObjects = atomically $ do
+    tracked_objects <- readTVar trackedQObjects
+    new_tracked_objects <- rec (M.assocs tracked_objects) tracked_objects
+    writeTVar trackedQObjects new_tracked_objects
+    modifyTVar garbageCollectionRoots
+               (S.intersection $ M.keysSet new_tracked_objects)
+  where
+    rec [] !tracked_objects = return tracked_objects
+    rec ((key, tvar):rest) !tracked_objects = do
+        actual_ptr <- readTVar tvar
+        rec rest $ if actual_ptr == nullPtr
+          then M.delete key tracked_objects
+          else tracked_objects
+
+-- exports for Qt side
+--
+
+-- called when destroyed() signal is triggered in Qt
+objectGotDestroyed :: TVar (Ptr QObject) -> IO ()
+objectGotDestroyed thing = atomically $ do
+    ptr <- readTVar thing
+    unless (ptr == nullPtr) $ do
+        writeTVar thing nullPtr
+        modifyTVar trackedQObjects (M.delete ptr)
+        modifyTVar garbageCollectionRoots $ S.delete ptr
+        modifyTVar referencedRoots $ S.delete ptr
 

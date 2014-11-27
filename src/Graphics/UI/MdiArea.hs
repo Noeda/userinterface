@@ -1,3 +1,4 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE AutoDeriveTypeable #-}
@@ -20,27 +21,19 @@ import Graphics.UI.Internal.Common
 
 foreign import ccall create_mdiarea :: IO (Ptr QMdiArea)
 foreign import ccall add_subwindow ::
-    Ptr QMdiArea -> Ptr QWidget -> FunPtr (IO ()) -> IO (Ptr QMdiSubWindow)
+    Ptr QMdiArea -> Ptr QWidget -> IO (Ptr QMdiSubWindow)
 
-newtype MdiArea s = MdiArea { mdiAreaPtr :: CommonQObject s QMdiArea }
-                    deriving ( Eq, Typeable )
+newtype MdiArea s = MdiArea (ManagedQObject QMdiArea)
+                    deriving ( Eq, Typeable, HasQObject, Touchable )
 
-newtype MdiSubWindow s = MdiSubWindow { mdiSubWindowPtr :: CommonQObject s QMdiSubWindow }
-                         deriving ( Eq, Typeable )
+newtype MdiSubWindow s = MdiSubWindow (ManagedQObject QMdiSubWindow)
+                         deriving ( Eq, Typeable, HasQObject, Touchable )
 
-instance HasCommonQObject (MdiSubWindow s) s QMdiSubWindow where
-    getCommonQObject = mdiSubWindowPtr
+instance HasManagedQObject (MdiArea s) QMdiArea where
+    getManagedQObject (MdiArea man) = man
 
-instance UIElement (MdiSubWindow s) s where
-    delete = deleteCommonQObject . getCommonQObject
-    qwidget = castCommonQObject . getCommonQObject
-
-instance HasCommonQObject (MdiArea s) s QMdiArea where
-    getCommonQObject = mdiAreaPtr
-
-instance UIElement (MdiArea s) s where
-    delete = deleteCommonQObject . getCommonQObject
-    qwidget = castCommonQObject . getCommonQObject
+instance HasManagedQObject (MdiSubWindow s) QMdiSubWindow where
+    getManagedQObject (MdiSubWindow man) = man
 
 instance CentralWidgetable (MdiArea s) s QMdiArea where
     centralWidgetableProof _ = ()
@@ -52,7 +45,7 @@ instance CentralWidgetable (MdiArea s) s QMdiArea where
 createMdiArea :: UIAction s (MdiArea s)
 createMdiArea = liftIO $ mask_ $ do
     mdi_area <- create_mdiarea
-    MdiArea <$> addCommonQObject mdi_area Nothing "QMdiArea"
+    MdiArea <$> (manageQObject =<< createTrackedQObject mdi_area)
 
 -- | Adds a subwidget to the MDI area.
 --
@@ -61,20 +54,13 @@ createMdiArea = liftIO $ mask_ $ do
 --
 -- Consequences are undefined if you attempt to add the subwidget to another UI
 -- construct after this.
-addSubWidget :: forall a s b. (UIElement a s, CentralWidgetable a s b)
+addSubWidget :: forall a s b. (CentralWidgetable a s b)
              => a
              -> MdiArea s
              -> UIAction s ()
 addSubWidget widget mdi = liftIO $ mask_ $
-    withCommonQObject mdi $ \mdi_ptr ->
-        withCommonQObject widget $ \widget_ptr -> do
-            let wptr = castPtr widget_ptr
-            ac <- wrapAndInsulateIO $ unsafeUnwrapUIAction when_being_deleted
-            void $ add_subwindow mdi_ptr wptr ac
-
-            addChild mdi_ptr wptr
-                    (parentKeepsAlive $ castCommonQObject $ getCommonQObject widget)
-  where
-    when_being_deleted :: UIAction s ()
-    when_being_deleted = liftIO $ delete widget
+    withManagedQObject widget $ \widget_ptr ->
+    withManagedQObject mdi $ \mdi_ptr -> do
+        let wptr = castPtr widget_ptr
+        void $ add_subwindow mdi_ptr wptr
 

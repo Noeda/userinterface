@@ -12,8 +12,6 @@ import Control.Monad.IO.Class
 import Data.IORef
 import Data.Typeable
 import Foreign.Ptr
-import Graphics.UI.Internal.QObject
-import Graphics.UI.Internal.QTypes
 import System.IO.Unsafe
 
 foreign import ccall "wrapper" wrapIO :: IO () -> IO (FunPtr (IO ()))
@@ -43,19 +41,6 @@ insulateExceptions action = mask $ \restore -> do
         Left err -> writeIORef pendingException (Just err) >>
                     application_quit
         Right ok -> return ok
-
--- | Elements that can be deleted. Use `Graphics.UI.deleteUIElement` to delete
--- elements.
---
--- Once deleted, trying to use the element will result in a user error. In
--- addition, deleting elements that have children also deletes the children.
---
--- Deleting already deleted elements is safe and does not do anything.
-class UIElement a s | a -> s where
-    -- | Deletes an element. Don't use this, use `Graphics.UI.deleteUIElement`.
-    delete :: a -> IO ()
-    -- | Returns the underlying widget of the element.
-    qwidget :: a -> CommonQObject s QWidget
 
 eventHandler :: Event -> IO ()
 eventHandler event = do
