@@ -23,10 +23,10 @@ foreign import ccall create_timer :: CInt
 
 type Milliseconds = Int
 
-newtype Timer s = Timer (ManagedQObject QTimer)
-                  deriving ( Eq, Typeable, HasQObject, Touchable )
+newtype Timer = Timer (ManagedQObject QTimer)
+                deriving ( Eq, Typeable, HasQObject, Touchable )
 
-instance HasManagedQObject (Timer s) QTimer where
+instance HasManagedQObject Timer QTimer where
     getManagedQObject (Timer man) = man
 
 -- | Schedule a `UIAction` to run after given number of milliseconds.
@@ -38,8 +38,8 @@ createTimer :: Bool                   -- ^ One-shot? If `True`, the timer runs
                                       --   the action will be run again and
                                       --   again every N milliseconds.
             -> Milliseconds
-            -> UIAction s ()
-            -> UIAction s (Timer s)
+            -> UIAction ()
+            -> UIAction Timer
 createTimer oneshot milliseconds (UIAction (insulateExceptions -> action)) = liftIO $ mask_ $ do
     mvar <- newEmptyMVar
     wrapped_action <- wrapIO $ do

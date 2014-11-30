@@ -55,7 +55,7 @@ qtActive = unsafePerformIO $ newIORef False
 -- that is running `runUI`. If you need to stop the UI, use `stopUI` which will
 -- work from any thread.
 runUI :: MonadIO m
-      => (forall s. Event -> UIAction s ()) -- ^ Receives global events.
+      => (Event -> UIAction ()) -- ^ Receives global events.
       -> m ()
 runUI callback' = liftIO $ runInBoundThread $ mask $ \restore -> do
     ok <- atomicModifyIORef' qtActive $ \old ->

@@ -13,6 +13,9 @@ import Data.Monoid
 import qualified Data.Text as T
 import Graphics.UI
 import Graphics.UI.DockWidget
+import Graphics.UI.GroupBox
+import Graphics.UI.Label
+import Graphics.UI.Layout
 import Graphics.UI.MainWindow
 import Graphics.UI.MenuBar
 import Graphics.UI.MdiArea
@@ -39,12 +42,28 @@ main = do
                 mdi <- createMdiArea
                 setCentralWidget mdi w
                 m <- createMenuBar w
-                m1 <- createMenu "File" m
+                m1 <- createMenu "&File" m
                 addMenuAction "Exit" m1 $ delete w
 
-                te <- createTextEdit $ return ()
-                d <- createDockWidget w te
-                title d <-- "AAaa"
+                box <- createGroupBox $ \x -> liftIO $ print x
+                title box <-- "Boksy"
+                checkable box <-- True
+
+                sw <- addSubWidget box mdi
+                Just sw_layout <- layout sw
+                liftIO . print =<< readVar (sizeConstraint sw_layout)
+                sizeConstraint sw_layout <-- FixedSize
+                title sw <-- "Buksy"
+
+                b <- createBoxLayout
+
+                te2 <- createTextEdit $ return ()
+                addSubWidget te2 mdi
+
+                lab <- createLabel
+                text lab <-- "Hello"
+                d <- createDockWidget w lab
+                title d <-- "AA&aa"
                 return ()
             _ -> return ()
 

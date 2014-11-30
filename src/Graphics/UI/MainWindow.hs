@@ -2,6 +2,7 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE AutoDeriveTypeable #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -27,16 +28,19 @@ foreign import ccall take_central_widget :: Ptr QMainWindow
                                          -> IO (Ptr QWidget)
 foreign import ccall show_widget :: Ptr QWidget -> IO ()
 
-newtype MainWindow s = MainWindow (ManagedQObject QMainWindow)
-                       deriving ( Eq, Typeable
+newtype MainWindow = MainWindow (ManagedQObject QMainWindow)
+                       deriving ( Eq
+                                , Typeable
                                 , HasQObject
                                 , Touchable )
 
-instance HasManagedQObject (MainWindow s) QMainWindow where
+instance HasManagedQObject MainWindow QMainWindow where
     getManagedQObject (MainWindow man) = man
 
-instance Titleable (MainWindow s) s where
+instance IsWidget MainWindow where
     getWidget = coerceManagedQObject . getManagedQObject
+
+instance Titleable MainWindow
 
 --instance HasCommonQObject (MainWindow s) s QMainWindow where
 --    getCommonQObject (MainWindow cobject) = cobject
@@ -52,7 +56,7 @@ instance Titleable (MainWindow s) s where
 --
 -- You do not need to hold a reference to the returned `MainWindow` to keep the
 -- window alive.
-createMainWindow :: UIAction s (MainWindow s)
+createMainWindow :: UIAction MainWindow
 createMainWindow = liftIO $ mask_ $ do
     w <- create_main_window
     mwindow <- MainWindow <$> (manageQObject =<< createRoot w)
@@ -66,8 +70,9 @@ createMainWindow = liftIO $ mask_ $ do
 --
 -- The widget becomes a child of the window and is deleted if the main window
 -- is deleted.
-setCentralWidget :: CentralWidgetable a s b => a -> MainWindow s -> UIAction s ()
-setCentralWidget central_object mwindow = mask_ $ liftIO $
+setCentralWidget :: (IsWidget a, CentralWidgetable a)
+                 => a -> MainWindow -> UIAction ()
+setCentralWidget (getWidget -> central_object) mwindow = mask_ $ liftIO $
     withManagedQObject mwindow $ \mainwindow_ptr ->
         withManagedQObject central_object $ \child_tr -> do
             void $ take_central_widget mainwindow_ptr

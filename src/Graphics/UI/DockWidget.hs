@@ -4,6 +4,7 @@
 {-# LANGUAGE AutoDeriveTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ViewPatterns #-}
 
 -- | Dockable widgets.
 --
@@ -23,13 +24,15 @@ foreign import ccall create_dockwidget
     -> FunPtr (IO ())
     -> IO (Ptr QDockWidget)
 
-newtype DockWidget s = DockWidget (ManagedQObject QDockWidget)
-                       deriving ( Eq, Typeable, HasQObject, Touchable )
+newtype DockWidget = DockWidget (ManagedQObject QDockWidget)
+                     deriving ( Eq, Typeable, HasQObject, Touchable )
 
-instance HasManagedQObject (DockWidget s) QDockWidget where
+instance HasManagedQObject DockWidget QDockWidget where
     getManagedQObject (DockWidget man) = man
 
-instance Titleable (DockWidget s) s where
+instance Titleable DockWidget
+
+instance IsWidget DockWidget where
     getWidget = coerceManagedQObject . getManagedQObject
 
 -- | Creates a dock widget and attaches it to a main window.
@@ -39,11 +42,11 @@ instance Titleable (DockWidget s) s where
 --
 -- Consequences are undefined if you attempt to add the subwidget to another UI
 -- construct after this.
-createDockWidget :: forall a s b. (CentralWidgetable a s b)
-                 => MainWindow s
+createDockWidget :: (IsWidget a, CentralWidgetable a)
+                 => MainWindow
                  -> a   -- ^ What to show inside the dock widget.
-                 -> UIAction s (DockWidget s)
-createDockWidget mainwindow child_widget = liftIO $ mask_ $ do
+                 -> UIAction DockWidget
+createDockWidget mainwindow (getWidget -> child_widget) = liftIO $ mask_ $ do
     withManagedQObject mainwindow $ \mainwindow_ptr -> do
         withManagedQObject child_widget $ \child_ptr -> do
             ac <- wrapAndInsulateIO $ return ()

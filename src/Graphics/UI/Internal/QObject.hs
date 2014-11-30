@@ -97,7 +97,7 @@ manageQObject tvar = do
     ref <- newIORef ()
     void $ mkWeakIORef ref $ atomically $ do
         ptr <- readTVar tvar
-        modifyTVar referencedRoots $ S.delete ptr
+        unless (ptr == nullPtr) $ releaseRef ptr
 
     return ManagedQObject {
              _qobject = tvar
@@ -129,9 +129,22 @@ garbageCollectionRoots :: TVar (S.Set (Ptr QObject))
 garbageCollectionRoots = unsafePerformIO $ newTVarIO S.empty
 {-# NOINLINE garbageCollectionRoots #-}
 
-referencedRoots :: TVar (S.Set (Ptr QObject))
-referencedRoots = unsafePerformIO $ newTVarIO S.empty
+referencedRoots :: TVar (M.Map (Ptr QObject) Int)
+referencedRoots = unsafePerformIO $ newTVarIO M.empty
 {-# NOINLINE referencedRoots #-}
+
+addRef :: Ptr QObject -> STM ()
+addRef ptr = modifyTVar referencedRoots $ \old_map ->
+    case M.lookup ptr old_map of
+        Nothing -> M.insert ptr 1 old_map
+        Just x  -> M.insert ptr (x+1) old_map
+
+releaseRef :: Ptr QObject -> STM ()
+releaseRef ptr = modifyTVar referencedRoots $ \old_map ->
+    case M.lookup ptr old_map of
+        Nothing -> old_map
+        Just x | x <= 1 -> M.delete ptr old_map
+               | otherwise -> M.insert ptr (x-1) old_map
 
 emptyVisitation :: Visitation
 emptyVisitation = Visitation S.empty S.empty
@@ -143,14 +156,14 @@ addRoot :: Ptr QObject -> TVar (Ptr QObject) -> STM ()
 addRoot pointer tvar_root = do
     modifyTVar trackedQObjects (M.insert pointer tvar_root)
     modifyTVar garbageCollectionRoots (S.insert pointer)
-    modifyTVar referencedRoots (S.insert pointer)
+    addRef pointer
 
 -- | Adds a tracked QObject. It will be automatically deleted when deleted from
 -- Qt's side. (The TVar will be set to null when this happens).
 addTrackedQObject :: Ptr QObject -> TVar (Ptr QObject) -> STM ()
 addTrackedQObject pointer tvar_root = do
     modifyTVar trackedQObjects (M.insert pointer tvar_root)
-    modifyTVar referencedRoots (S.insert pointer)
+    addRef pointer
 
 unRoot :: TVar (Ptr QObject) -> IO ()
 unRoot tvar = atomically $ do
@@ -158,35 +171,41 @@ unRoot tvar = atomically $ do
     unless (p == nullPtr) $ do
         modifyTVar garbageCollectionRoots $ S.delete p
 
+createX :: (Ptr QObject -> TVar (Ptr QObject) -> STM ())
+        -> Ptr a -> IO (TVar (Ptr QObject))
+createX adder (castPtr -> pointer) = mask_ $ do
+    result <- atomically $ do
+        -- if it's already tracked...return the tracked qobject!
+        tracked <- readTVar trackedQObjects
+        case M.lookup pointer tracked of
+            Just already -> return $ return already
+            Nothing -> do
+                tvar <- do
+                    tvar <- newTVar pointer
+                    adder pointer tvar
+                    return tvar
+                return $ do
+                    trigger <- wrapIO $ objectGotDestroyed tvar
+                    link_destroy_event pointer trigger
+                    return tvar
+    result
+
 -- | A helper function to turn a Ptr QObject into a root and a tvar.
 createRoot :: Ptr a -> IO (TVar (Ptr QObject))
-createRoot (castPtr -> pointer) = mask_ $ do
-    tvar <- atomically $ do
-        tvar <- newTVar pointer
-        addRoot pointer tvar
-        return tvar
-    trigger <- wrapIO $ objectGotDestroyed tvar
-    link_destroy_event pointer trigger
-    return tvar
+createRoot = createX addRoot
 
 -- | A helper function to turn a Ptr QObject into a tracked QObject.
 createTrackedQObject :: Ptr a -> IO (TVar (Ptr QObject))
-createTrackedQObject (castPtr -> pointer) = mask_ $ do
-    tvar <- atomically $ do
-        tvar <- newTVar pointer
-        addTrackedQObject pointer tvar
-        return tvar
-    trigger <- wrapIO $ objectGotDestroyed tvar
-    link_destroy_event pointer trigger
-    return tvar
+createTrackedQObject = createX addTrackedQObject
 
 deleteQObject :: TVar (Ptr QObject) -> IO ()
 deleteQObject tvar = (=<<) maybeDeleteIt $ atomically $ do
     ptr <- readTVar tvar
     unless (ptr == nullPtr) $ do
+        writeTVar tvar nullPtr
         modifyTVar garbageCollectionRoots $ S.delete ptr
         modifyTVar trackedQObjects $ M.delete ptr
-        modifyTVar referencedRoots $ S.delete ptr
+        modifyTVar referencedRoots $ M.delete ptr
     return $ if ptr == nullPtr
       then Nothing
       else Just ptr
@@ -203,7 +222,7 @@ showGCStats prelude = do
     roots <- atomically $ readTVar garbageCollectionRoots
     putStrLn $ "Roots (" ++ show (S.size roots) ++ ") : " ++ show roots
     refs <- atomically $ readTVar referencedRoots
-    putStrLn $ "References (" ++ show (S.size refs) ++ ") : " ++ show refs
+    putStrLn $ "References (" ++ show (M.size refs) ++ ") : " ++ show refs
     tracked <- fmap (filter (/= nullPtr) . M.elems) $ atomically $ do
         tracked <- readTVar trackedQObjects
         for tracked $ readTVar
@@ -217,7 +236,7 @@ garbageCollectionCycle = mask_ $ do
     removeDeadTrackedObjects
 
     roots <- atomically $ S.union <$> readTVar garbageCollectionRoots <*>
-                                      readTVar referencedRoots
+                                      (M.keysSet <$> readTVar referencedRoots)
     -- collect objects that are alive by roots
     alive <- _visited <$>
              execStateT collectAliveObjects emptyVisitation {
@@ -299,5 +318,5 @@ objectGotDestroyed thing = atomically $ do
         writeTVar thing nullPtr
         modifyTVar trackedQObjects (M.delete ptr)
         modifyTVar garbageCollectionRoots $ S.delete ptr
-        modifyTVar referencedRoots $ S.delete ptr
+        modifyTVar referencedRoots $ M.delete ptr
 

@@ -57,10 +57,12 @@ activeCallback = unsafePerformIO $ newIORef Nothing
 --
 -- This monad enforces:
 --
+--     * There is a Qt event loop active.
 --     * All UI functions are run in the same thread.
 --     * UI resources cannot be transferred to another UI instance.
 --
-newtype UIAction s a = UIAction { unsafeUnwrapUIAction :: IO a }
+-- Use `ioToUIAction` to jump back into `UIAction`.
+newtype UIAction a = UIAction { unsafeUnwrapUIAction :: IO a }
                        deriving ( Monad
                                 , MonadThrow
                                 , MonadCatch
@@ -70,7 +72,17 @@ newtype UIAction s a = UIAction { unsafeUnwrapUIAction :: IO a }
                                 , Typeable
                                 , Applicative )
 
-instance MonadIO (UIAction s) where
+-- | Run an `UIAction` in `IO`.
+--
+-- This function is safe if the conditions listed in `UIAction` documentation
+-- all hold.
+--
+-- This function is free performance-wise, `UIAction` is just a newtype around
+-- `IO`.
+uiActionToIO :: UIAction a -> IO a
+uiActionToIO (UIAction io) = io
+
+instance MonadIO UIAction where
     liftIO = UIAction
 
 -- | Global events.

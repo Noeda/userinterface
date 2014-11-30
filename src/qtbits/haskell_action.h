@@ -17,7 +17,22 @@ public:
 
 public slots:
     void trigger();
-    void trigger_qobject( QObject* );
+};
+
+class IntHaskellAction : public QObject
+{
+    Q_OBJECT
+private:
+    void (*haskellTrigger)(int);
+
+public:
+    IntHaskellAction( QObject* parent
+                    , void (*hsTrigger)(int) );
+    virtual ~IntHaskellAction();
+
+public slots:
+    void trigger(int);
+    void trigger(bool);
 };
 
 #endif

@@ -56,8 +56,3 @@ void HaskellAction::trigger()
     haskellTrigger();
 }
 
-void HaskellAction::trigger_qobject( QObject* )
-{
-    haskellTrigger();
-}
-

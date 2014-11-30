@@ -4,6 +4,7 @@
 {-# LANGUAGE AutoDeriveTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ViewPatterns #-}
 
 -- | MDI area widget. MDI applications have their own \"desktop\" that in turn
 -- has smaller windows.
@@ -18,31 +19,39 @@ module Graphics.UI.MdiArea
 
 import Control.Monad
 import Graphics.UI.Internal.Common
+import Graphics.UI.Widget
 
 foreign import ccall create_mdiarea :: IO (Ptr QMdiArea)
 foreign import ccall add_subwindow ::
     Ptr QMdiArea -> Ptr QWidget -> IO (Ptr QMdiSubWindow)
 
-newtype MdiArea s = MdiArea (ManagedQObject QMdiArea)
-                    deriving ( Eq, Typeable, HasQObject, Touchable )
+newtype MdiArea = MdiArea (ManagedQObject QMdiArea)
+                  deriving ( Eq, Typeable, HasQObject, Touchable )
 
-newtype MdiSubWindow s = MdiSubWindow (ManagedQObject QMdiSubWindow)
-                         deriving ( Eq, Typeable, HasQObject, Touchable )
+newtype MdiSubWindow = MdiSubWindow (ManagedQObject QMdiSubWindow)
+                       deriving ( Eq, Typeable, HasQObject, Touchable )
 
-instance HasManagedQObject (MdiArea s) QMdiArea where
+instance HasManagedQObject MdiArea QMdiArea where
     getManagedQObject (MdiArea man) = man
 
-instance HasManagedQObject (MdiSubWindow s) QMdiSubWindow where
+instance HasManagedQObject MdiSubWindow QMdiSubWindow where
     getManagedQObject (MdiSubWindow man) = man
 
-instance CentralWidgetable (MdiArea s) s QMdiArea where
-    centralWidgetableProof _ = ()
+instance CentralWidgetable MdiArea
+
+instance Titleable MdiSubWindow
+
+instance IsWidget MdiArea where
+    getWidget = coerceManagedQObject . getManagedQObject
+
+instance IsWidget MdiSubWindow where
+    getWidget = coerceManagedQObject . getManagedQObject
 
 -- | Creates an MDI area widget.
 --
 -- You probably want to use it as a central widget to some main window
 -- (`Graphics.UI.MainWindow.setCentralWidget`).
-createMdiArea :: UIAction s (MdiArea s)
+createMdiArea :: UIAction MdiArea
 createMdiArea = liftIO $ mask_ $ do
     mdi_area <- create_mdiarea
     MdiArea <$> (manageQObject =<< createTrackedQObject mdi_area)
@@ -54,13 +63,14 @@ createMdiArea = liftIO $ mask_ $ do
 --
 -- Consequences are undefined if you attempt to add the subwidget to another UI
 -- construct after this.
-addSubWidget :: forall a s b. (CentralWidgetable a s b)
+addSubWidget :: (IsWidget a, CentralWidgetable a)
              => a
-             -> MdiArea s
-             -> UIAction s ()
-addSubWidget widget mdi = liftIO $ mask_ $
+             -> MdiArea
+             -> UIAction MdiSubWindow
+addSubWidget (getWidget -> widget) mdi = liftIO $ mask_ $
     withManagedQObject widget $ \widget_ptr ->
     withManagedQObject mdi $ \mdi_ptr -> do
         let wptr = castPtr widget_ptr
-        void $ add_subwindow mdi_ptr wptr
+        MdiSubWindow <$> (manageQObject =<< createTrackedQObject =<<
+                          add_subwindow mdi_ptr wptr)
 

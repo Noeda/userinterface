@@ -16,6 +16,9 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Graphics.UI
                        Graphics.UI.DockWidget
+                       Graphics.UI.GroupBox
+                       Graphics.UI.Label
+                       Graphics.UI.Layout
                        Graphics.UI.MainWindow
                        Graphics.UI.MdiArea
                        Graphics.UI.MenuBar
