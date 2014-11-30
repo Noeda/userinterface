@@ -17,7 +17,6 @@ module Graphics.UI.MdiArea
     , CentralWidgetable() )
     where
 
-import Control.Monad
 import Graphics.UI.Internal.Common
 import Graphics.UI.Widget
 
