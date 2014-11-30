@@ -5,4 +5,5 @@ HEADERS += haskell_event_glue.h haskell_action.h
 TEMPLATE = lib
 TARGET = qtbits
 QT += widgets
+CONFIG += static create_prl
 

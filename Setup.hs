@@ -42,13 +42,31 @@ main = defaultMainWithHooks simpleUserHooks {
                                 _ -> error $ "Program not found: " ++ name
         guard_program findQmake "qmake"
         guard_program findMake "make"
-        return lbi
 
-   ,buildHook = \pd lbi uh bf -> do
-        let qmake_program = fromJust $ snd $ fromJust $ findQmake lbi
-            make_program = fromJust $ snd $ fromJust $ findMake lbi
+        -- We have to build the qtbits in *configuration* phase or otherwise
+        -- the library won't be picked up by any programs that use this
+        -- library.
+        --
+        -- Things I tried:
+        --
+        --    Just find qmake/make and then build qtbits in buildHook -->
+        --    libraries using this library won't pickup qtbits and fail
+        --
+        --    Same as above but add qtbits to confHook as extra library -->
+        --    cabal configure fails for this package.
+        --
+        --    Can we add an extra library in confHook but make it not fail if
+        --    it's missing? I don't know how so we are stuck with this hack.
+        path <- getCurrentDirectory
+        let qt_build_dir = path ++ "/" ++ buildDir lbi
+            new_lbi = lbi { localPkgDescr =
+                            linkQtTo (qt_build_dir)
+                                     (localPkgDescr lbi) }
+
+        let qmake_program = fromJust $ snd $ fromJust $ findQmake new_lbi
+            make_program = fromJust $ snd $ fromJust $ findMake new_lbi
         old_path <- getCurrentDirectory
-        let qt_build_dir = buildDir lbi ++ "/qtbits"
+        let qt_build_dir = buildDir new_lbi ++ "/qtbits"
         createDirectoryIfMissing True qt_build_dir
         setCurrentDirectory "src/qtbits"
         runProgram normal qmake_program ["qtbits.pro", "-o", "../../" ++ qt_build_dir ++ "/Makefile"]
@@ -57,14 +75,11 @@ main = defaultMainWithHooks simpleUserHooks {
         runProgram normal make_program []
         setCurrentDirectory old_path
 
-        -- link to the built Qt library
-        let pd' = linkQtTo "bequel" (old_path ++ "/" ++ buildDir lbi) pd
-
-        buildHook simpleUserHooks pd' lbi uh bf
+        return new_lbi
     }
 
-linkQtTo :: String -> FilePath -> PackageDescription -> PackageDescription
-linkQtTo name dist_dir pd =
+linkQtTo :: FilePath -> PackageDescription -> PackageDescription
+linkQtTo dist_dir pd =
     pd { library = fmap addLinking' (library pd) }
   where
     addLinking' thing = thing { libBuildInfo = addLinking'' (libBuildInfo thing) }
