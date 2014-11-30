@@ -13,6 +13,10 @@ category:            Graphics
 build-type:          Custom
 cabal-version:       >=1.10
 
+source-repository head
+    type:     git
+    location: https://github.com/Noeda/caramia.git
+
 flag build-examples
   default:             False
 
