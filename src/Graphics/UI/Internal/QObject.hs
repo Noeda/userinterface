@@ -8,6 +8,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE CPP #-}
 {-# OPTIONS_GHC -fno-warn-unused-binds #-}
 
 module Graphics.UI.Internal.QObject
@@ -214,7 +215,11 @@ deleteQObject tvar = (=<<) maybeDeleteIt $ atomically $ do
     maybeDeleteIt (Just ptr) = post_delete_event ptr
 
 whenDebugging :: IO () -> IO ()
+#ifdef USERINTERFACE_QT_DEBUG
 whenDebugging action = action
+#else
+whenDebugging _ = return ()
+#endif
 
 showGCStats :: String -> IO ()
 showGCStats prelude = do
